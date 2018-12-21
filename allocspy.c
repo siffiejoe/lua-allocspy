@@ -16,7 +16,9 @@
 typedef struct {
   lua_Alloc alloc;
   void*     ud;
-  int       enabled;
+  ptrdiff_t bytes;
+  unsigned char enabled;
+  unsigned char verbose;
 } alloc_state;
 
 
@@ -34,17 +36,23 @@ static alloc_state* get_alloc_state( lua_State* L ) {
 
 static int allocspy_enable( lua_State* L ) {
   alloc_state* state = get_alloc_state( L );
-  if( state != NULL )
+  if( state != NULL ) {
+    state->verbose = lua_toboolean( L, 1 );
     state->enabled = 1;
+  }
   return 0;
 }
 
 
 static int allocspy_disable( lua_State* L ) {
   alloc_state* state = get_alloc_state( L );
-  if( state != NULL )
+  if( state != NULL ) {
     state->enabled = 0;
-  return 0;
+    lua_pushinteger( L, state->bytes );
+    state->bytes = 0;
+  } else
+    lua_pushinteger( L, 0 );
+  return 1;
 }
 
 
@@ -59,33 +67,38 @@ static void* allocspy_allocate( void* ud, void* ptr, size_t osize, size_t nsize 
   alloc_state* as = (alloc_state*)ud;
   if( as->enabled ) {
     if( ptr != NULL ) { /* realloc or free */
-      if( nsize > osize ) {
-        fprintf( stderr, "(re-)allocating %zu bytes\n", nsize - osize );
-      } else {
-        fprintf( stderr, "freeing %zu bytes\n", osize - nsize );
+      as->bytes += (ptrdiff_t)nsize - (ptrdiff_t)osize;
+      if( as->verbose ) {
+        if( nsize > osize )
+          fprintf( stderr, "(re-)allocating %zu bytes\n", nsize - osize );
+        else
+          fprintf( stderr, "freeing %zu bytes\n", osize - nsize );
       }
     } else { /* alloc */
-      switch( osize ) {
+      as->bytes += (ptrdiff_t)nsize;
+      if( as->verbose ) {
+        switch( osize ) {
 #if LUA_VERSION_NUM > 501
-        case LUA_TSTRING:
-          fprintf( stderr, "allocating %zu bytes for a string\n", nsize );
-          break;
-        case LUA_TTABLE:
-          fprintf( stderr, "allocating %zu bytes for a table\n", nsize );
-          break;
-        case LUA_TFUNCTION:
-          fprintf( stderr, "allocating %zu bytes for a function\n", nsize );
-          break;
-        case LUA_TUSERDATA:
-          fprintf( stderr, "allocating %zu bytes for a userdata\n", nsize );
-          break;
-        case LUA_TTHREAD:
-          fprintf( stderr, "allocating %zu bytes for a thread\n", nsize );
-          break;
+          case LUA_TSTRING:
+            fprintf( stderr, "allocating %zu bytes for a string\n", nsize );
+            break;
+          case LUA_TTABLE:
+            fprintf( stderr, "allocating %zu bytes for a table\n", nsize );
+            break;
+          case LUA_TFUNCTION:
+            fprintf( stderr, "allocating %zu bytes for a function\n", nsize );
+            break;
+          case LUA_TUSERDATA:
+            fprintf( stderr, "allocating %zu bytes for a userdata\n", nsize );
+            break;
+          case LUA_TTHREAD:
+            fprintf( stderr, "allocating %zu bytes for a thread\n", nsize );
+            break;
 #endif
-        default:
-          fprintf( stderr, "allocating %zu bytes\n", nsize );
-          break;
+          default:
+            fprintf( stderr, "allocating %zu bytes\n", nsize );
+            break;
+        }
       }
     }
   }
@@ -116,6 +129,8 @@ EXPORT int luaopen_allocspy( lua_State* L ) {
     lua_pushvalue( L, -3 );
     lua_rawset( L, LUA_REGISTRYINDEX );
     state->enabled = 0;
+    state->verbose = 0;
+    state->bytes = 0;
     state->alloc = lua_getallocf( L, &(state->ud) );
     lua_setallocf( L, allocspy_allocate, state );
     lua_setmetatable( L, -2 );
